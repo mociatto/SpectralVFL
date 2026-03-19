@@ -1,0 +1,19 @@
+
+*
+
+
+# Keep tracked
+!.gitignore
+
+!src/
+!src/**
+
+
+# Never track
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+data/
+
+.DS_Store
