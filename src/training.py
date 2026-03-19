@@ -71,6 +71,44 @@ def compute_class_weights(
 
 
 # -----------------------------------------------------------------------------
+# Early Stopping
+# -----------------------------------------------------------------------------
+
+
+class EarlyStopping:
+    """
+    Stop training when val_loss does not improve for `patience` epochs.
+    """
+
+    def __init__(
+        self,
+        patience: int = 8,
+        min_delta: float = 0.0,
+    ):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss: Optional[float] = None
+        self.early_stop = False
+
+    def __call__(self, val_loss: float) -> bool:
+        if self.best_loss is None:
+            self.best_loss = val_loss
+            return False
+
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.counter = 0
+            return False
+
+        self.counter += 1
+        if self.counter >= self.patience:
+            self.early_stop = True
+            return True
+        return False
+
+
+# -----------------------------------------------------------------------------
 # Optimizer Setup
 # -----------------------------------------------------------------------------
 
@@ -212,6 +250,8 @@ def train_vfl_system(
     weight_decay: float = 0.01,
     save_path: Optional[Union[str, Path]] = None,
     device: Optional[torch.device] = None,
+    early_stopping_patience: int = 8,
+    early_stopping_min_delta: float = 0.0,
 ) -> Dict[str, List[float]]:
     """
     Orchestrate the full training pipeline.
@@ -260,6 +300,7 @@ def train_vfl_system(
         "val_balanced_acc": [],
     }
     best_balanced_acc = 0.0
+    early_stopping = EarlyStopping(patience=early_stopping_patience, min_delta=early_stopping_min_delta)
 
     for epoch in range(num_epochs):
         train_loss = train_vfl_epoch(
@@ -304,5 +345,9 @@ def train_vfl_system(
             f"Val Acc: {val_acc:.4f} | "
             f"Val Balanced Acc: {val_balanced_acc:.4f}"
         )
+
+        if early_stopping(val_loss):
+            print(f"Early stopping at epoch {epoch + 1}. Best weights saved to {save_path}.")
+            break
 
     return history

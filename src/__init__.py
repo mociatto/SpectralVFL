@@ -10,6 +10,7 @@ from .data_utils import (
 )
 from .models import ImageClient, TabularClient, VFLServer, get_vfl_system
 from .training import (
+    EarlyStopping,
     compute_class_weights,
     evaluate_vfl,
     get_trainable_params,
@@ -28,6 +29,7 @@ __all__ = [
     "TabularClient",
     "VFLServer",
     "get_vfl_system",
+    "EarlyStopping",
     "compute_class_weights",
     "evaluate_vfl",
     "get_trainable_params",

@@ -78,10 +78,11 @@ class ImageClient(nn.Module):
 
         self.backbone = backbone
         self.projection = nn.Sequential(
-            nn.Linear(backbone_dim, 256),
+            nn.Linear(backbone_dim, 512),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.1),
-            nn.Linear(256, image_emb_dim),
+            nn.Dropout(0.3),
+            nn.Linear(512, image_emb_dim),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -104,8 +105,8 @@ class TabularClient(nn.Module):
         self,
         input_dim: int,
         tab_emb_dim: int = 64,
-        hidden_dim: int = 128,
-        dropout: float = 0.2,
+        hidden_dim: int = 64,
+        dropout: float = 0.3,
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -115,10 +116,8 @@ class TabularClient(nn.Module):
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
             nn.Linear(hidden_dim, tab_emb_dim),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -141,17 +140,18 @@ class VFLServer(nn.Module):
         image_emb_dim: int = 128,
         tab_emb_dim: int = 64,
         num_classes: int = 7,
-        hidden_dim: int = 128,
-        dropout: float = 0.2,
     ):
         super().__init__()
         input_dim = image_emb_dim + tab_emb_dim
 
         self.fusion = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
+            nn.Linear(input_dim, 256),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes),
+            nn.Dropout(0.4),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(128, num_classes),
         )
 
     def forward(self, image_emb: torch.Tensor, tab_emb: torch.Tensor) -> torch.Tensor:
