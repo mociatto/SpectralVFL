@@ -1,6 +1,6 @@
 """SpectralVFL - Inference-time frequency evasion attack against Multi-Modal VFL."""
 
-from .config import config
+from .config import DatasetPathsSpec, TrainConfig, config
 from .data_utils import (
     MultimodalSkinDataset,
     TabularPreprocessor,
@@ -13,6 +13,7 @@ from .training import (
     EarlyStopping,
     compute_class_weights,
     evaluate_vfl,
+    generate_evaluation_report,
     get_trainable_params,
     train_vfl_epoch,
     train_vfl_system,
@@ -20,6 +21,8 @@ from .training import (
 
 __all__ = [
     "config",
+    "DatasetPathsSpec",
+    "TrainConfig",
     "MultimodalSkinDataset",
     "TabularPreprocessor",
     "get_dataloaders",
@@ -32,6 +35,7 @@ __all__ = [
     "EarlyStopping",
     "compute_class_weights",
     "evaluate_vfl",
+    "generate_evaluation_report",
     "get_trainable_params",
     "train_vfl_epoch",
     "train_vfl_system",

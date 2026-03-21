@@ -17,6 +17,8 @@ _BACKBONE_DIMS: Dict[str, int] = {
     "resnet50": 2048,
     "efficientnet_b0": 1280,
     "mobilenet_v3_small": 576,
+    "densenet121": 1024,
+    "mamba_vision": 768,
 }
 
 

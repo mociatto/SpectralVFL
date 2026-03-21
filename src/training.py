@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, f1_score, roc_auc_score
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -232,6 +232,87 @@ def evaluate_vfl(
     return float(mean_loss), float(accuracy), float(balanced_acc)
 
 
+def generate_evaluation_report(
+    image_client: ImageClient,
+    tabular_client: TabularClient,
+    vfl_server: VFLServer,
+    dataloader: DataLoader,
+    device: torch.device,
+    num_classes: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Run evaluation and return a single-row DataFrame with advanced metrics.
+
+    Metrics (percentages rounded to 2 decimals): Accuracy, Balanced Accuracy,
+    Macro-F1, Macro AUC-ROC (multiclass OVR).
+    """
+    image_client.eval()
+    tabular_client.eval()
+    vfl_server.eval()
+
+    all_labels: List[int] = []
+    all_preds: List[int] = []
+    all_probs: List[np.ndarray] = []
+
+    with torch.no_grad():
+        for images, tabular, labels in tqdm(dataloader, desc="Report", leave=False):
+            images = images.to(device, non_blocking=True)
+            tabular = tabular.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            img_emb = image_client(images)
+            tab_emb = tabular_client(tabular)
+            logits = vfl_server(img_emb, tab_emb)
+            probs = torch.softmax(logits, dim=1)
+
+            preds = logits.argmax(dim=1).cpu().numpy()
+            all_preds.extend(preds.tolist())
+            all_labels.extend(labels.cpu().numpy().tolist())
+            all_probs.append(probs.cpu().numpy())
+
+    if not all_labels:
+        return pd.DataFrame(
+            {
+                "Accuracy (%)": [0.0],
+                "Balanced Accuracy (%)": [0.0],
+                "Macro-F1 (%)": [0.0],
+                "Macro AUC-ROC (%)": [0.0],
+            }
+        )
+
+    y_true = np.array(all_labels, dtype=np.int64)
+    y_pred = np.array(all_preds, dtype=np.int64)
+    y_proba = np.vstack(all_probs)
+
+    n_cls = num_classes or y_proba.shape[1]
+    labels_idx = np.arange(n_cls)
+
+    correct = (y_pred == y_true).sum()
+    accuracy = correct / len(y_true)
+    balanced_acc = balanced_accuracy_score(y_true, y_pred)
+    macro_f1 = f1_score(y_true, y_pred, average="macro", labels=labels_idx, zero_division=0)
+
+    try:
+        macro_auc = roc_auc_score(
+            y_true,
+            y_proba,
+            multi_class="ovr",
+            average="macro",
+            labels=labels_idx,
+        )
+    except ValueError:
+        macro_auc = float("nan")
+
+    row = {
+        "Accuracy (%)": round(100.0 * accuracy, 2),
+        "Balanced Accuracy (%)": round(100.0 * balanced_acc, 2),
+        "Macro-F1 (%)": round(100.0 * macro_f1, 2),
+        "Macro AUC-ROC (%)": round(100.0 * macro_auc, 2) if not np.isnan(macro_auc) else np.nan,
+    }
+
+    return pd.DataFrame([row])
+
+
 # -----------------------------------------------------------------------------
 # Main Routine
 # -----------------------------------------------------------------------------
@@ -245,12 +326,12 @@ def train_vfl_system(
     val_loader: DataLoader,
     train_df: pd.DataFrame,
     label_col: str = "dx",
-    num_epochs: int = 30,
-    learning_rate: float = 1e-3,
-    weight_decay: float = 0.01,
+    num_epochs: Optional[int] = None,
+    learning_rate: Optional[float] = None,
+    weight_decay: Optional[float] = None,
     save_path: Optional[Union[str, Path]] = None,
     device: Optional[torch.device] = None,
-    early_stopping_patience: int = 8,
+    early_stopping_patience: Optional[int] = None,
     early_stopping_min_delta: float = 0.0,
 ) -> Dict[str, List[float]]:
     """
@@ -276,6 +357,13 @@ def train_vfl_system(
     device = device or (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
     save_path = Path(save_path) if save_path else Path(config.paths.kaggle_working) / "best_vfl_model.pth"
     save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    num_epochs = num_epochs if num_epochs is not None else config.train.epochs
+    learning_rate = learning_rate if learning_rate is not None else config.train.learning_rate
+    weight_decay = weight_decay if weight_decay is not None else config.train.weight_decay
+    early_stopping_patience = (
+        early_stopping_patience if early_stopping_patience is not None else config.train.patience
+    )
 
     # Move models to device
     image_client = image_client.to(device)
