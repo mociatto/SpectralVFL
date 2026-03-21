@@ -5,7 +5,7 @@ IEEE TDSC - Inference-time frequency evasion attack against Multi-Modal VFL.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 
 # -----------------------------------------------------------------------------
@@ -115,6 +115,31 @@ class TrainConfig:
     patience: int = 8  # early stopping on val_loss
 
 
+def _default_experiment_dataset_roots() -> Dict[str, str]:
+    """Absolute path to each dataset root (folder containing metadata + image dirs)."""
+    return {
+        "ham10000": "/kaggle/input/datasets/kmader/skin-cancer-mnist-ham10000",
+        "bcn20000": "",  # set when BCN20000 is integrated
+    }
+
+
+@dataclass(frozen=True)
+class ExperimentConfig:
+    """
+    Ablation / factory grid: which datasets and backbones to run.
+
+    Use ``config.ACTIVE_DATASETS`` / ``config.ACTIVE_MODELS`` in orchestrators.
+    """
+
+    active_datasets: Tuple[str, ...] = ("ham10000",)
+    active_models: Tuple[str, ...] = (
+        "resnet50",
+        "efficientnet_b0",
+        "mobilenet_v3_small",
+    )
+    dataset_roots: Dict[str, str] = field(default_factory=_default_experiment_dataset_roots)
+
+
 @dataclass(frozen=True)
 class HAM10000TabularConfig:
     """
@@ -158,12 +183,23 @@ class Config:
     paths: PathsConfig = field(default_factory=PathsConfig)
     hyperparams: HyperparametersConfig = field(default_factory=HyperparametersConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
     tabular: HAM10000TabularConfig = field(default_factory=HAM10000TabularConfig)
 
     @property
     def dataset_paths(self) -> Dict[str, DatasetPathsSpec]:
         """Convenience: read-only view of the dataset registry."""
         return dict(self.paths.datasets)
+
+    @property
+    def ACTIVE_DATASETS(self) -> List[str]:
+        """Datasets to include in factory / ablation runs."""
+        return list(self.experiment.active_datasets)
+
+    @property
+    def ACTIVE_MODELS(self) -> List[str]:
+        """Backbone names to include in factory / ablation runs."""
+        return list(self.experiment.active_models)
 
 
 # Singleton config instance
