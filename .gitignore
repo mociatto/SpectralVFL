@@ -8,6 +8,8 @@
 !src/
 !src/**
 
+!requirements.txt
+
 
 # Never track
 **/__pycache__/

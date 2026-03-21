@@ -1,0 +1,9 @@
+# SpectralVFL — Kaggle / local
+torch>=2.0
+torchvision>=0.15
+torchmetrics>=1.0
+pandas>=1.5
+numpy>=1.23
+scikit-learn>=1.2
+tqdm>=4.65
+Pillow>=9.0
