@@ -1,0 +1,114 @@
+"""
+Perceptual / stealth metrics between clean and adversarial images in [0, 1].
+Uses torchmetrics (PSNR, SSIM, LPIPS with AlexNet).
+"""
+
+from __future__ import annotations
+
+from typing import Dict
+
+import torch
+import torch.nn as nn
+
+try:
+    from torchmetrics.functional.image import (
+        learned_perceptual_image_patch_similarity,
+        peak_signal_noise_ratio,
+        structural_similarity_index_measure,
+    )
+except ImportError:  # pragma: no cover
+    learned_perceptual_image_patch_similarity = None
+    peak_signal_noise_ratio = None
+    structural_similarity_index_measure = None
+
+
+def compute_stealth_metrics(
+    clean_images_01: torch.Tensor,
+    adv_images_01: torch.Tensor,
+    reduction: str = "mean",
+) -> Dict[str, float]:
+    """
+    Compare clean vs adversarial images in [0, 1] range, shape (N, 3, H, W).
+
+    Returns dict with keys: psnr, ssim, lpips (lower LPIPS = more similar).
+    """
+    if clean_images_01.shape != adv_images_01.shape:
+        raise ValueError("clean and adv tensors must have the same shape.")
+
+    preds = adv_images_01.clamp(0.0, 1.0)
+    target = clean_images_01.clamp(0.0, 1.0)
+
+    if peak_signal_noise_ratio is None or structural_similarity_index_measure is None:
+        raise ImportError("torchmetrics is required for compute_stealth_metrics. pip install torchmetrics")
+
+    # PSNR / SSIM: data in [0, 1]
+    psnr = peak_signal_noise_ratio(preds, target, data_range=1.0)
+    ssim = structural_similarity_index_measure(preds, target, data_range=1.0)
+
+    out: Dict[str, float] = {}
+    if reduction == "mean":
+        out["psnr"] = float(psnr.mean() if psnr.dim() > 0 else psnr)
+        out["ssim"] = float(ssim.mean() if ssim.dim() > 0 else ssim)
+    else:
+        out["psnr"] = float(psnr)
+        out["ssim"] = float(ssim)
+
+    # LPIPS (AlexNet); normalize=True for inputs in [0, 1]
+    if learned_perceptual_image_patch_similarity is None:
+        out["lpips"] = float("nan")
+        return out
+
+    lpips_val = learned_perceptual_image_patch_similarity(
+        preds,
+        target,
+        net_type="alex",
+        normalize=True,
+        reduction="mean",
+    )
+    out["lpips"] = float(lpips_val.mean() if lpips_val.dim() > 0 else lpips_val)
+
+    return out
+
+
+def aggregate_metrics_list(rows: list) -> Dict[str, float]:
+    """Average over list of dicts with same keys."""
+    if not rows:
+        return {}
+    keys = rows[0].keys()
+    return {k: float(sum(d[k] for d in rows) / len(rows)) for k in keys}
+
+
+@torch.no_grad()
+def compute_attack_success_rate(
+    image_client: nn.Module,
+    tabular_client: nn.Module,
+    vfl_server: nn.Module,
+    images_norm: torch.Tensor,
+    tabular: torch.Tensor,
+    adv_images_01: torch.Tensor,
+    device: torch.device,
+) -> float:
+    """
+    ASR: fraction of samples where argmax server logits change after replacing image branch
+    with adversarial embedding (tabular unchanged).
+
+    images_norm: (N,3,H,W) normalized; adv_images_01: (N,3,H,W) in [0,1].
+    """
+    from .attacks import normalize_from_01
+
+    images_norm = images_norm.to(device)
+    tabular = tabular.to(device)
+    adv_images_01 = adv_images_01.to(device)
+
+    clean_emb = image_client(images_norm)
+    tab_emb = tabular_client(tabular)
+    clean_logits = vfl_server(clean_emb, tab_emb)
+    clean_pred = clean_logits.argmax(dim=1)
+
+    x_adv_n = normalize_from_01(adv_images_01)
+    adv_emb = image_client(x_adv_n)
+    adv_logits = vfl_server(adv_emb, tab_emb)
+    adv_pred = adv_logits.argmax(dim=1)
+
+    changed = (clean_pred != adv_pred).float().mean().item()
+    return 100.0 * changed
