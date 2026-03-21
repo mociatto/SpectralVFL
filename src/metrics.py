@@ -22,6 +22,14 @@ except ImportError:  # pragma: no cover
     structural_similarity_index_measure = None
 
 
+def _tensor_to_float_scalar(t: torch.Tensor) -> float:
+    """Detach from graph and move to CPU before scalar conversion (avoids autograd warnings)."""
+    x = t.detach().cpu()
+    if x.dim() > 0:
+        return float(x.mean().item())
+    return float(x.item())
+
+
 def compute_stealth_metrics(
     clean_images_01: torch.Tensor,
     adv_images_01: torch.Tensor,
@@ -35,37 +43,40 @@ def compute_stealth_metrics(
     if clean_images_01.shape != adv_images_01.shape:
         raise ValueError("clean and adv tensors must have the same shape.")
 
-    preds = adv_images_01.clamp(0.0, 1.0)
-    target = clean_images_01.clamp(0.0, 1.0)
+    # Detach inputs so torchmetrics never sees tensors that may require grad
+    preds = adv_images_01.detach().clamp(0.0, 1.0)
+    target = clean_images_01.detach().clamp(0.0, 1.0)
 
     if peak_signal_noise_ratio is None or structural_similarity_index_measure is None:
         raise ImportError("torchmetrics is required for compute_stealth_metrics. pip install torchmetrics")
 
     # PSNR / SSIM: data in [0, 1]
-    psnr = peak_signal_noise_ratio(preds, target, data_range=1.0)
-    ssim = structural_similarity_index_measure(preds, target, data_range=1.0)
+    with torch.no_grad():
+        psnr = peak_signal_noise_ratio(preds, target, data_range=1.0)
+        ssim = structural_similarity_index_measure(preds, target, data_range=1.0)
 
     out: Dict[str, float] = {}
     if reduction == "mean":
-        out["psnr"] = float(psnr.mean() if psnr.dim() > 0 else psnr)
-        out["ssim"] = float(ssim.mean() if ssim.dim() > 0 else ssim)
+        out["psnr"] = _tensor_to_float_scalar(psnr.mean() if psnr.dim() > 0 else psnr)
+        out["ssim"] = _tensor_to_float_scalar(ssim.mean() if ssim.dim() > 0 else ssim)
     else:
-        out["psnr"] = float(psnr)
-        out["ssim"] = float(ssim)
+        out["psnr"] = _tensor_to_float_scalar(psnr)
+        out["ssim"] = _tensor_to_float_scalar(ssim)
 
     # LPIPS (AlexNet); normalize=True for inputs in [0, 1]
     if learned_perceptual_image_patch_similarity is None:
         out["lpips"] = float("nan")
         return out
 
-    lpips_val = learned_perceptual_image_patch_similarity(
-        preds,
-        target,
-        net_type="alex",
-        normalize=True,
-        reduction="mean",
-    )
-    out["lpips"] = float(lpips_val.mean() if lpips_val.dim() > 0 else lpips_val)
+    with torch.no_grad():
+        lpips_val = learned_perceptual_image_patch_similarity(
+            preds,
+            target,
+            net_type="alex",
+            normalize=True,
+            reduction="mean",
+        )
+    out["lpips"] = _tensor_to_float_scalar(lpips_val.mean() if lpips_val.dim() > 0 else lpips_val)
 
     return out
 
