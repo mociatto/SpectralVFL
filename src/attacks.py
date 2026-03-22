@@ -168,8 +168,9 @@ class SpatialPGD(BaseEmbeddingAttack):
 class AdaptiveSpectralPGD(BaseEmbeddingAttack):
     """
     PGD with per-image adaptive spectral sparsity: each step keeps only the top
-    ``sparsity_k`` fraction of frequency bins (by gradient FFT magnitude), then steps
-    in the spatial domain using the sign of the filtered gradient.
+    ``sparsity_k`` fraction of frequency bins (by gradient FFT magnitude), then
+    applies a linear step using the filtered gradient normalized per image by its
+    own L_inf norm (avoids ``sign()`` broadband harmonics).
     """
 
     def __init__(
@@ -200,9 +201,9 @@ class AdaptiveSpectralPGD(BaseEmbeddingAttack):
         else:
             delta = torch.zeros_like(x_clean_01)
         delta = delta.clamp(-self.epsilon, self.epsilon)
-        x_adv = (x_clean_01 + delta).clamp(0.0, 1.0)
 
         for _ in range(self.num_steps):
+            x_adv = (x_clean_01 + delta).clamp(0.0, 1.0)
             x_adv = x_adv.clone().detach().requires_grad_(True)
             x_n = normalize_from_01(x_adv)
             adv_emb = self.image_client(x_n)
@@ -210,8 +211,11 @@ class AdaptiveSpectralPGD(BaseEmbeddingAttack):
             grad = torch.autograd.grad(loss, x_adv)[0]
             grad_f = adaptive_spectral_filter_gradient(grad, self.sparsity_k)
 
-            x_adv = x_adv + self.alpha * grad_f.sign()
-            x_adv = torch.max(torch.min(x_adv, x_clean_01 + self.epsilon), x_clean_01 - self.epsilon)
-            x_adv = x_adv.clamp(0.0, 1.0)
+            b = x_adv.size(0)
+            max_abs = grad_f.abs().view(b, -1).max(dim=1)[0].view(b, 1, 1, 1) + 1e-8
+            normalized_grad = grad_f / max_abs
+            delta = delta + self.alpha * normalized_grad
+            delta = delta.clamp(-self.epsilon, self.epsilon)
 
-        return x_adv.detach()
+        x_out = (x_clean_01 + delta).clamp(0.0, 1.0)
+        return x_out.detach()
