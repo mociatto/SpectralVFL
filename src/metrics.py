@@ -50,10 +50,12 @@ def compute_stealth_metrics(
     if peak_signal_noise_ratio is None or structural_similarity_index_measure is None:
         raise ImportError("torchmetrics is required for compute_stealth_metrics. pip install torchmetrics")
 
-    # PSNR / SSIM: data in [0, 1]
+    # PSNR / SSIM: data in [0, 1] — detach metric tensors before float conversion
     with torch.no_grad():
         psnr = peak_signal_noise_ratio(preds, target, data_range=1.0)
         ssim = structural_similarity_index_measure(preds, target, data_range=1.0)
+        psnr = psnr.detach()
+        ssim = ssim.detach()
 
     out: Dict[str, float] = {}
     if reduction == "mean":
@@ -76,6 +78,7 @@ def compute_stealth_metrics(
             normalize=True,
             reduction="mean",
         )
+        lpips_val = lpips_val.detach()
     out["lpips"] = _tensor_to_float_scalar(lpips_val.mean() if lpips_val.dim() > 0 else lpips_val)
 
     return out
