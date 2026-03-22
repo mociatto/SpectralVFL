@@ -31,63 +31,39 @@ def normalize_from_01(x_01: torch.Tensor) -> torch.Tensor:
     return (x_01 - mean) / std
 
 
-def create_frequency_mask(
-    shape: Tuple[int, int],
-    band: str,
-    device: torch.device,
-    r_low: float = 40.0,
-    r_mid: float = 80.0,
-) -> torch.Tensor:
+def adaptive_spectral_filter_gradient(grad: torch.Tensor, sparsity_k: float) -> torch.Tensor:
     """
-    Radial mask in fftshifted frequency coordinates (H, W).
+    Keep only the top ``sparsity_k`` fraction of 2D-FFT magnitude bins **per image**
+    (shared mask across RGB); zero the rest; IFFT per channel.
 
-    Bands (center distance r):
-      - 'low':   r < r_low
-      - 'mid':   r_low <= r < r_mid
-      - 'high':  r >= r_mid
-      - 'all':   full spectrum
+    Magnitude per frequency bin is summed over channels so one (H, W) mask applies
+    to each image in the batch.
+
+    Args:
+        grad: (B, C, H, W) spatial gradient.
+        sparsity_k: fraction in (0, 1] of frequency bins (H×W) to retain per image.
+
+    Returns:
+        Filtered gradient (B, C, H, W), real.
     """
-    h, w = shape
-    yy = torch.arange(h, device=device, dtype=torch.float32).view(-1, 1)
-    xx = torch.arange(w, device=device, dtype=torch.float32).view(1, -1)
-    cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
-    r = torch.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+    if not 0.0 < sparsity_k <= 1.0:
+        raise ValueError(f"sparsity_k must be in (0, 1], got {sparsity_k}")
 
-    band = band.lower()
-    if band == "low":
-        m = (r < r_low).float()
-    elif band == "mid":
-        m = ((r >= r_low) & (r < r_mid)).float()
-    elif band == "high":
-        m = (r >= r_mid).float()
-    elif band == "all":
-        m = torch.ones(h, w, device=device, dtype=torch.float32)
-    else:
-        raise ValueError(f"Unknown band '{band}'. Use 'low', 'mid', 'high', or 'all'.")
-
-    return m
-
-
-def _spectral_filter_gradient(
-    grad: torch.Tensor,
-    mask_hw: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Apply band mask to 2D FFT of gradient (per spatial plane, summed over channels for direction).
-    grad: (B, C, H, W)
-    mask_hw: (H, W)
-    """
     b, c, h, w = grad.shape
-    m = mask_hw.view(1, 1, h, w).to(grad.device, grad.dtype)
-    out = torch.zeros_like(grad)
-    for ch in range(c):
-        g = grad[:, ch : ch + 1, :, :]  # (B,1,H,W)
-        G = torch.fft.fft2(g, dim=(-2, -1))
-        Gs = torch.fft.fftshift(G, dim=(-2, -1))
-        Gs = Gs * m
-        Gu = torch.fft.ifftshift(Gs, dim=(-2, -1))
-        g_f = torch.fft.ifft2(Gu, dim=(-2, -1)).real
-        out[:, ch, :, :] = g_f.squeeze(1)
+    n_bins = h * w
+    n_keep = max(1, min(int(round(sparsity_k * n_bins)), n_bins))
+
+    G = torch.fft.fft2(grad, dim=(-2, -1))
+    mag = torch.abs(G)
+    # Per-image combined magnitude over channels → one mask (H, W) per batch index
+    mag_img = mag.sum(dim=1)  # (B, H, W)
+    mag_flat = mag_img.reshape(b, n_bins)
+    _, idx = torch.topk(mag_flat, k=n_keep, dim=1, largest=True)
+    mask_flat = torch.zeros(b, n_bins, device=grad.device, dtype=grad.dtype)
+    mask_flat.scatter_(1, idx, 1.0)
+    mask = mask_flat.view(b, 1, h, w).expand_as(mag)
+    G_f = G * mask.to(dtype=G.dtype)
+    out = torch.fft.ifft2(G_f, dim=(-2, -1)).real
     return out
 
 
@@ -189,59 +165,33 @@ class SpatialPGD(BaseEmbeddingAttack):
         return x_adv.detach()
 
 
-class SpectralFGSM(BaseEmbeddingAttack):
-    """FGSM with gradient filtered in frequency domain."""
-
-    def __init__(self, image_client: nn.Module, epsilon: float, band: str = "all"):
-        super().__init__(image_client)
-        self.epsilon = epsilon
-        self.band = band
-
-    def __call__(self, x_norm: torch.Tensor) -> torch.Tensor:
-        x_01 = denormalize_to_01(x_norm)
-        _, _, h, w = x_01.shape
-        device = x_01.device
-        mask = create_frequency_mask((h, w), self.band, device)
-
-        with torch.no_grad():
-            clean_emb = self.image_client(x_norm)
-
-        x_01 = x_01.clone().detach().requires_grad_(True)
-        x_n = normalize_from_01(x_01)
-        adv_emb = self.image_client(x_n)
-        loss = F.mse_loss(adv_emb, clean_emb)
-        grad = torch.autograd.grad(loss, x_01)[0]
-        grad_f = _spectral_filter_gradient(grad, mask)
-
-        x_adv = x_01 + self.epsilon * grad_f.sign()
-        return x_adv.clamp(0.0, 1.0)
-
-
-class SpectralPGD(BaseEmbeddingAttack):
-    """PGD with spectral filtering of the gradient each step."""
+class AdaptiveSpectralPGD(BaseEmbeddingAttack):
+    """
+    PGD with per-image adaptive spectral sparsity: each step keeps only the top
+    ``sparsity_k`` fraction of frequency bins (by gradient FFT magnitude), then steps
+    in the spatial domain using the sign of the filtered gradient.
+    """
 
     def __init__(
         self,
         image_client: nn.Module,
         epsilon: float,
         alpha: float,
-        band: str = "all",
+        sparsity_k: float,
         num_steps: int = 10,
         random_start: bool = True,
     ):
         super().__init__(image_client)
-        self.epsilon = epsilon
-        self.alpha = alpha
-        self.band = band
-        self.num_steps = num_steps
+        self.epsilon = float(epsilon)
+        self.alpha = float(alpha)
+        self.sparsity_k = float(sparsity_k)
+        self.num_steps = int(num_steps)
         self.random_start = random_start
+        if not 0.0 < self.sparsity_k <= 1.0:
+            raise ValueError(f"sparsity_k must be in (0, 1], got {sparsity_k}")
 
     def __call__(self, x_norm: torch.Tensor) -> torch.Tensor:
         x_clean_01 = denormalize_to_01(x_norm)
-        _, _, h, w = x_clean_01.shape
-        device = x_clean_01.device
-        mask = create_frequency_mask((h, w), self.band, device)
-
         with torch.no_grad():
             clean_emb = self.image_client(x_norm)
 
@@ -258,7 +208,7 @@ class SpectralPGD(BaseEmbeddingAttack):
             adv_emb = self.image_client(x_n)
             loss = F.mse_loss(adv_emb, clean_emb)
             grad = torch.autograd.grad(loss, x_adv)[0]
-            grad_f = _spectral_filter_gradient(grad, mask)
+            grad_f = adaptive_spectral_filter_gradient(grad, self.sparsity_k)
 
             x_adv = x_adv + self.alpha * grad_f.sign()
             x_adv = torch.max(torch.min(x_adv, x_clean_01 + self.epsilon), x_clean_01 - self.epsilon)

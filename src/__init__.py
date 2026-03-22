@@ -1,12 +1,11 @@
 """SpectralVFL - Inference-time frequency evasion attack against Multi-Modal VFL."""
 
 from .attacks import (
+    AdaptiveSpectralPGD,
     BaseEmbeddingAttack,
     SpatialFGSM,
     SpatialPGD,
-    SpectralFGSM,
-    SpectralPGD,
-    create_frequency_mask,
+    adaptive_spectral_filter_gradient,
     denormalize_to_01,
     normalize_from_01,
 )
@@ -31,12 +30,11 @@ from .training import (
 )
 
 __all__ = [
+    "AdaptiveSpectralPGD",
     "BaseEmbeddingAttack",
     "SpatialFGSM",
     "SpatialPGD",
-    "SpectralFGSM",
-    "SpectralPGD",
-    "create_frequency_mask",
+    "adaptive_spectral_filter_gradient",
     "denormalize_to_01",
     "normalize_from_01",
     "compute_attack_success_rate",
