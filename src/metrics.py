@@ -5,7 +5,7 @@ Uses torchmetrics (PSNR, SSIM, LPIPS with AlexNet).
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -34,11 +34,16 @@ def compute_stealth_metrics(
     clean_images_01: torch.Tensor,
     adv_images_01: torch.Tensor,
     reduction: str = "mean",
+    lpips_chunk_size: Optional[int] = 32,
 ) -> Dict[str, float]:
     """
     Compare clean vs adversarial images in [0, 1] range, shape (N, 3, H, W).
 
     Returns dict with keys: psnr, ssim, lpips (lower LPIPS = more similar).
+
+    All metrics run on ``adv_images_01.device`` so LPIPS (AlexNet) matches the input device.
+    ``lpips_chunk_size`` caps LPIPS micro-batches to reduce VRAM spikes when N is large.
+    Set ``lpips_chunk_size=None`` to compute LPIPS in one shot (legacy behavior).
     """
     if clean_images_01.shape != adv_images_01.shape:
         raise ValueError("clean and adv tensors must have the same shape.")
@@ -46,6 +51,9 @@ def compute_stealth_metrics(
     # Detach inputs so torchmetrics never sees tensors that may require grad
     preds = adv_images_01.detach().clamp(0.0, 1.0)
     target = clean_images_01.detach().clamp(0.0, 1.0)
+    dev = preds.device
+    preds = preds.to(dev)
+    target = target.to(dev)
 
     if peak_signal_noise_ratio is None or structural_similarity_index_measure is None:
         raise ImportError("torchmetrics is required for compute_stealth_metrics. pip install torchmetrics")
@@ -65,21 +73,41 @@ def compute_stealth_metrics(
         out["psnr"] = _tensor_to_float_scalar(psnr)
         out["ssim"] = _tensor_to_float_scalar(ssim)
 
-    # LPIPS (AlexNet); normalize=True for inputs in [0, 1]
+    # LPIPS (AlexNet); normalize=True for inputs in [0, 1]; chunked to avoid VRAM spikes
     if learned_perceptual_image_patch_similarity is None:
         out["lpips"] = float("nan")
         return out
 
+    n = preds.size(0)
     with torch.no_grad():
-        lpips_val = learned_perceptual_image_patch_similarity(
-            preds,
-            target,
-            net_type="alex",
-            normalize=True,
-            reduction="mean",
-        )
-        lpips_val = lpips_val.detach()
-    out["lpips"] = _tensor_to_float_scalar(lpips_val.mean() if lpips_val.dim() > 0 else lpips_val)
+        if lpips_chunk_size is None or n <= lpips_chunk_size:
+            lpips_val = learned_perceptual_image_patch_similarity(
+                preds,
+                target,
+                net_type="alex",
+                normalize=True,
+                reduction="mean",
+            )
+            lpips_val = lpips_val.detach()
+            out["lpips"] = _tensor_to_float_scalar(
+                lpips_val.mean() if lpips_val.dim() > 0 else lpips_val
+            )
+        else:
+            acc = 0.0
+            for i in range(0, n, lpips_chunk_size):
+                end = min(i + lpips_chunk_size, n)
+                chunk_p = preds[i:end]
+                chunk_t = target[i:end]
+                lp = learned_perceptual_image_patch_similarity(
+                    chunk_p,
+                    chunk_t,
+                    net_type="alex",
+                    normalize=True,
+                    reduction="mean",
+                )
+                lp = lp.detach()
+                acc += float(lp.mean().item() if lp.dim() > 0 else lp.item()) * (end - i)
+            out["lpips"] = acc / float(n)
 
     return out
 
