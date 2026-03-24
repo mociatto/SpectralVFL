@@ -1,3 +1,4 @@
+shap>=0.43
 torchmetrics>=1.0
 pandas>=1.5
 numpy>=1.23
