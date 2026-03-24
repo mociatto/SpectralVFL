@@ -81,10 +81,10 @@ class ImageClient(nn.Module):
         self.backbone = backbone
         self.projection = nn.Sequential(
             nn.Linear(backbone_dim, 512),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.Dropout(0.3),
             nn.Linear(512, image_emb_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -116,10 +116,10 @@ class TabularClient(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, tab_emb_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -148,10 +148,10 @@ class VFLServer(nn.Module):
 
         self.fusion = nn.Sequential(
             nn.Linear(input_dim, 256),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.Dropout(0.4),
             nn.Linear(256, 128),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.Dropout(0.3),
             nn.Linear(128, num_classes),
         )
