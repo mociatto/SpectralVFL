@@ -81,6 +81,7 @@ def run_kfold_vfl_training(
     device: Optional[torch.device] = None,
     num_workers: int = 0,
     random_state: int = 42,
+    dataset_key: Optional[str] = None,
     best_checkpoint_path: Optional[Union[str, Path]] = None,
 ) -> Dict[str, str]:
     """
@@ -93,7 +94,14 @@ def run_kfold_vfl_training(
     out_path = (
         Path(best_checkpoint_path)
         if best_checkpoint_path
-        else Path(config.paths.kaggle_working) / f"best_vfl_kfold_{model_name}.pth"
+        else (
+            Path(config.paths.kaggle_working)
+            / "best_vfl_models"
+            / dataset_key
+            / f"{model_name}.pth"
+            if dataset_key
+            else Path(config.paths.kaggle_working) / f"best_vfl_kfold_{model_name}.pth"
+        )
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
