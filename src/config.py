@@ -135,7 +135,8 @@ class ExperimentConfig:
     active_models: Tuple[str, ...] = (
         "resnet50",
         "efficientnet_b0",
-        "mobilenet_v3_small",
+        "vit_b_16",
+        "mamba_vision",
     )
     dataset_roots: Dict[str, str] = field(default_factory=_default_experiment_dataset_roots)
 

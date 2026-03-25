@@ -15,10 +15,12 @@ from .data_utils import (
     TabularPreprocessor,
     get_dataloaders,
     get_image_transforms,
+    get_kfold_dataloaders,
     stratified_group_split,
 )
 from .models import ImageClient, TabularClient, VFLServer, get_vfl_system
 from .metrics import compute_attack_success_rate, compute_stealth_metrics
+from .trainer import run_kfold_vfl_training
 from .training import (
     EarlyStopping,
     compute_class_weights,
@@ -47,6 +49,7 @@ __all__ = [
     "TabularPreprocessor",
     "get_dataloaders",
     "get_image_transforms",
+    "get_kfold_dataloaders",
     "stratified_group_split",
     "ImageClient",
     "TabularClient",
@@ -59,4 +62,5 @@ __all__ = [
     "get_trainable_params",
     "train_vfl_epoch",
     "train_vfl_system",
+    "run_kfold_vfl_training",
 ]

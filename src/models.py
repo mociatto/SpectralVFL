@@ -12,12 +12,12 @@ from torchvision import models
 from .config import config
 
 
-# Backbone output dimensions (after avgpool, before classifier)
+# Backbone output dimensions (after avgpool / global pool, before classifier head)
 _BACKBONE_DIMS: Dict[str, int] = {
     "resnet50": 2048,
     "efficientnet_b0": 1280,
     "mobilenet_v3_small": 576,
-    "densenet121": 1024,
+    "vit_b_16": 768,
     "mamba_vision": 768,
 }
 
@@ -45,6 +45,28 @@ def _get_backbone(model_name: str, pretrained: bool = True) -> Tuple[nn.Module, 
             weights=models.MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
         )
         backbone.classifier = nn.Identity()
+    elif model_name == "vit_b_16":
+        try:
+            w = models.ViT_B_16_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.vit_b_16(weights=w)
+        except (AttributeError, RuntimeError, TypeError):
+            backbone = models.vit_b_16(pretrained=pretrained)
+        backbone.heads = nn.Identity()
+    elif model_name == "mamba_vision":
+        try:
+            import timm
+
+            backbone = timm.create_model(
+                "mambavision_t_1k",
+                pretrained=pretrained,
+                num_classes=0,
+            )
+            dim = int(getattr(backbone, "num_features", dim))
+        except Exception:
+            w = models.Swin_T_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.swin_t(weights=w)
+            backbone.head = nn.Identity()
+            dim = 768
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
@@ -178,7 +200,9 @@ def get_vfl_system(
     Initialize and return the full VFL system.
 
     Args:
-        model_name: Backbone for ImageClient ('resnet50', 'efficientnet_b0', 'mobilenet_v3_small').
+        model_name: Backbone for ImageClient (
+            'resnet50', 'efficientnet_b0', 'mobilenet_v3_small', 'vit_b_16', 'mamba_vision'
+        ).
         tabular_dim: Input dimension for TabularClient (from TabularPreprocessor.tabular_dim).
         image_emb_dim: Output dimension of ImageClient.
         tab_emb_dim: Output dimension of TabularClient.

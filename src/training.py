@@ -333,6 +333,8 @@ def train_vfl_system(
     device: Optional[torch.device] = None,
     early_stopping_patience: Optional[int] = None,
     early_stopping_min_delta: float = 0.0,
+    save_checkpoint: bool = True,
+    verbose: bool = True,
 ) -> Dict[str, List[float]]:
     """
     Orchestrate the full training pipeline.
@@ -350,6 +352,8 @@ def train_vfl_system(
         weight_decay: Weight decay for AdamW.
         save_path: Path to save best checkpoint. Default: /kaggle/working/best_vfl_model.pth
         device: Device to run on. Default: cuda if available else cpu.
+        save_checkpoint: If False, best weights are not written to disk (in-memory training only).
+        verbose: If False, suppress epoch print statements (K-fold / batch runs).
 
     Returns:
         history: Dict with keys 'train_loss', 'val_loss', 'val_acc', 'val_balanced_acc'.
@@ -416,26 +420,33 @@ def train_vfl_system(
 
         if val_balanced_acc > best_balanced_acc:
             best_balanced_acc = val_balanced_acc
-            torch.save(
-                {
-                    "image_client": image_client.state_dict(),
-                    "tabular_client": tabular_client.state_dict(),
-                    "vfl_server": vfl_server.state_dict(),
-                },
-                save_path,
-            )
-            print(f"Epoch {epoch + 1}/{num_epochs} | New best Balanced Acc: {val_balanced_acc:.4f} | Saved to {save_path}")
+            if save_checkpoint:
+                torch.save(
+                    {
+                        "image_client": image_client.state_dict(),
+                        "tabular_client": tabular_client.state_dict(),
+                        "vfl_server": vfl_server.state_dict(),
+                    },
+                    save_path,
+                )
+            if verbose:
+                msg = f"Epoch {epoch + 1}/{num_epochs} | New best Balanced Acc: {val_balanced_acc:.4f}"
+                if save_checkpoint:
+                    msg += f" | Saved to {save_path}"
+                print(msg)
 
-        print(
-            f"Epoch {epoch + 1}/{num_epochs} | "
-            f"Train Loss: {train_loss:.4f} | "
-            f"Val Loss: {val_loss:.4f} | "
-            f"Val Acc: {val_acc:.4f} | "
-            f"Val Balanced Acc: {val_balanced_acc:.4f}"
-        )
+        if verbose:
+            print(
+                f"Epoch {epoch + 1}/{num_epochs} | "
+                f"Train Loss: {train_loss:.4f} | "
+                f"Val Loss: {val_loss:.4f} | "
+                f"Val Acc: {val_acc:.4f} | "
+                f"Val Balanced Acc: {val_balanced_acc:.4f}"
+            )
 
         if early_stopping(val_loss):
-            print(f"Early stopping at epoch {epoch + 1}. Best weights saved to {save_path}.")
+            if verbose:
+                print(f"Early stopping at epoch {epoch + 1}. Best weights saved to {save_path}.")
             break
 
     return history

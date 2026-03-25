@@ -4,13 +4,13 @@ Handles HAM10000: images + tabular metadata with stratified group splitting.
 """
 
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
 from PIL import Image
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -339,3 +339,79 @@ def get_dataloaders(
     )
 
     return train_loader, val_loader, test_loader, preprocessor, label_encoder
+
+
+def get_kfold_dataloaders(
+    df: pd.DataFrame,
+    label_col: str,
+    k: int = 5,
+    batch_size: int = 32,
+    *,
+    image_dirs: Union[Tuple[Path, Path], List[Path]],
+    num_workers: Optional[int] = None,
+    random_state: int = 42,
+    augment_train: bool = True,
+) -> Iterator[Tuple[int, DataLoader, DataLoader]]:
+    """
+    Stratified K-fold splits (sample-level). Yields one fold at a time.
+
+    Fits ``TabularPreprocessor`` on the training split of each fold only.
+
+    Yields:
+        (fold_idx, train_loader, val_loader) with ``fold_idx`` in ``0 .. k-1``.
+    """
+    hp = config.hyperparams
+    num_workers = num_workers if num_workers is not None else hp.num_workers
+    cfg = config.tabular
+
+    valid_labels = set(config.tabular.dx_classes)
+    df_clean = df.dropna(subset=[label_col]).copy()
+    df_clean = df_clean[df_clean[label_col].isin(valid_labels)].reset_index(drop=True)
+
+    y = df_clean[label_col].values
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=random_state)
+
+    img_dirs = list(image_dirs) if isinstance(image_dirs, tuple) else image_dirs
+
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(df_clean)), y)):
+        train_df = df_clean.iloc[train_idx].reset_index(drop=True)
+        val_df = df_clean.iloc[val_idx].reset_index(drop=True)
+
+        preprocessor = TabularPreprocessor()
+        preprocessor.fit(train_df)
+
+        label_encoder = LabelEncoder()
+        label_encoder.fit(list(config.tabular.dx_classes))
+
+        train_ds = MultimodalSkinDataset(
+            train_df,
+            img_dirs,
+            preprocessor,
+            label_encoder,
+            transform=get_image_transforms(hp.image_size, is_training=augment_train),
+        )
+        val_ds = MultimodalSkinDataset(
+            val_df,
+            img_dirs,
+            preprocessor,
+            label_encoder,
+            transform=get_image_transforms(hp.image_size, is_training=False),
+        )
+
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=hp.pin_memory,
+            drop_last=True,
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=hp.pin_memory,
+        )
+
+        yield fold_idx, train_loader, val_loader
